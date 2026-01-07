@@ -1,0 +1,7 @@
+{
+  "name": "QR-Attend: College Attendance",
+  "description": "A comprehensive QR-based college attendance management system featuring role-based access for Admin, Teachers, and Students, real-time QR generation with expiry, and advanced reporting.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

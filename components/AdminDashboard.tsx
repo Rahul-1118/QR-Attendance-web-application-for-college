@@ -1,13 +1,13 @@
 
 import React, { useState, useMemo } from 'react';
 import { Database } from '../store';
-import { User, UserRole, Subject } from '../types';
-import { Users, BookOpen, BarChart3, Plus, Trash2, Edit2, Search, FileDown, X, ShieldCheck, UserCog, GraduationCap } from 'lucide-react';
+import { User, UserRole, Subject, Department } from '../types';
+import { Users, BookOpen, BarChart3, Plus, Trash2, Edit2, Search, FileDown, X, ShieldCheck, UserCog, GraduationCap, Building2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import * as XLSX from 'xlsx';
 
 const AdminDashboard: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'users' | 'subjects' | 'reports'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'subjects' | 'reports' | 'departments'>('users');
   const [searchQuery, setSearchQuery] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -24,8 +24,12 @@ const AdminDashboard: React.FC = () => {
     rollNumber: ''
   });
 
+  // Dept Form State
+  const [deptForm, setDeptForm] = useState({ name: '', code: '' });
+
   const users = Database.getUsers();
   const subjects = Database.getSubjects();
+  const departments = Database.getDepartments();
   const records = Database.getRecords();
 
   const filteredUsers = useMemo(() => {
@@ -66,7 +70,7 @@ const AdminDashboard: React.FC = () => {
         name: '',
         email: '',
         password: 'password',
-        department: 'CS',
+        department: departments[0]?.code || '',
         year: '1st',
         section: 'A',
         rollNumber: ''
@@ -91,11 +95,28 @@ const AdminDashboard: React.FC = () => {
   const handleDeleteUser = (id: string) => {
     if (window.confirm('Are you sure you want to delete this user?')) {
       Database.deleteUser(id);
-      // Trigger re-render by local state if needed, but Database is static here
-      // For a real app, we'd use a state management lib or hook
       window.location.reload(); 
     }
   };
+
+  const handleAddDept = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deptForm.name || !deptForm.code) return;
+    Database.addDepartment({
+      id: Math.random().toString(36).substr(2, 9),
+      name: deptForm.name,
+      code: deptForm.code.toUpperCase()
+    });
+    setDeptForm({ name: '', code: '' });
+    window.location.reload();
+  };
+
+  const handleDeleteDept = (id: string) => {
+    if (window.confirm('Delete this department? All associated data will remain but dropdowns will update.')) {
+      Database.deleteDepartment(id);
+      window.location.reload();
+    }
+  }
 
   const exportToExcel = () => {
     const worksheet = XLSX.utils.json_to_sheet(users);
@@ -109,7 +130,7 @@ const AdminDashboard: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Administrator Panel</h1>
-          <p className="text-slate-500">Global oversight of Students, Teachers, and System Access</p>
+          <p className="text-slate-500">Global oversight of Institutional Structure</p>
         </div>
         <div className="flex gap-2">
           <button 
@@ -150,6 +171,15 @@ const AdminDashboard: React.FC = () => {
           </div>
         </div>
         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4">
+          <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center">
+            <Building2 size={20} />
+          </div>
+          <div>
+            <p className="text-slate-500 text-xs font-medium">Departments</p>
+            <p className="text-xl font-bold text-slate-800">{departments.length}</p>
+          </div>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4">
           <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-lg flex items-center justify-center">
             <ShieldCheck size={20} />
           </div>
@@ -158,35 +188,32 @@ const AdminDashboard: React.FC = () => {
             <p className="text-xl font-bold text-slate-800">{stats.adminCount}</p>
           </div>
         </div>
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center gap-4">
-          <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center">
-            <BookOpen size={20} />
-          </div>
-          <div>
-            <p className="text-slate-500 text-xs font-medium">Subjects</p>
-            <p className="text-xl font-bold text-slate-800">{subjects.length}</p>
-          </div>
-        </div>
       </div>
 
       {/* Tabs */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="flex border-b">
+        <div className="flex border-b overflow-x-auto">
           <button 
             onClick={() => setActiveTab('users')}
-            className={`px-6 py-4 text-sm font-medium transition-colors ${activeTab === 'users' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/30' : 'text-slate-500 hover:text-slate-700'}`}
+            className={`px-6 py-4 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === 'users' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/30' : 'text-slate-500 hover:text-slate-700'}`}
           >
             User Records
           </button>
           <button 
+            onClick={() => setActiveTab('departments')}
+            className={`px-6 py-4 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === 'departments' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/30' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            Departments
+          </button>
+          <button 
             onClick={() => setActiveTab('subjects')}
-            className={`px-6 py-4 text-sm font-medium transition-colors ${activeTab === 'subjects' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/30' : 'text-slate-500 hover:text-slate-700'}`}
+            className={`px-6 py-4 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === 'subjects' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/30' : 'text-slate-500 hover:text-slate-700'}`}
           >
             Course Catalog
           </button>
           <button 
             onClick={() => setActiveTab('reports')}
-            className={`px-6 py-4 text-sm font-medium transition-colors ${activeTab === 'reports' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/30' : 'text-slate-500 hover:text-slate-700'}`}
+            className={`px-6 py-4 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === 'reports' ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50/30' : 'text-slate-500 hover:text-slate-700'}`}
           >
             Analytics
           </button>
@@ -263,6 +290,53 @@ const AdminDashboard: React.FC = () => {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'departments' && (
+            <div className="space-y-6">
+              <form onSubmit={handleAddDept} className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row gap-4 items-end">
+                <div className="flex-1">
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Dept Name</label>
+                  <input 
+                    type="text" required
+                    placeholder="e.g. Biological Sciences"
+                    className="w-full p-2 bg-white border border-slate-200 rounded-lg"
+                    value={deptForm.name}
+                    onChange={(e) => setDeptForm({...deptForm, name: e.target.value})}
+                  />
+                </div>
+                <div className="w-full md:w-32">
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Code</label>
+                  <input 
+                    type="text" required
+                    placeholder="BIO"
+                    className="w-full p-2 bg-white border border-slate-200 rounded-lg"
+                    value={deptForm.code}
+                    onChange={(e) => setDeptForm({...deptForm, code: e.target.value})}
+                  />
+                </div>
+                <button type="submit" className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition-colors">
+                  Add Department
+                </button>
+              </form>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {departments.map(d => (
+                  <div key={d.id} className="p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+                    <div>
+                      <h4 className="font-bold text-slate-800">{d.name}</h4>
+                      <p className="text-xs text-indigo-600 font-bold uppercase">{d.code}</p>
+                    </div>
+                    <button 
+                      onClick={() => handleDeleteDept(d.id)}
+                      className="p-2 text-slate-400 hover:text-red-600 transition-colors"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -372,10 +446,9 @@ const AdminDashboard: React.FC = () => {
                         value={formData.department}
                         onChange={(e) => setFormData({...formData, department: e.target.value})}
                       >
-                        <option>CS</option>
-                        <option>EE</option>
-                        <option>ME</option>
-                        <option>BIO</option>
+                        {departments.map(d => (
+                          <option key={d.id} value={d.code}>{d.name} ({d.code})</option>
+                        ))}
                       </select>
                     </div>
                     {formData.role === UserRole.STUDENT && (

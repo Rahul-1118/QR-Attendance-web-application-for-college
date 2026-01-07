@@ -2,7 +2,8 @@
 export enum UserRole {
   ADMIN = 'ADMIN',
   TEACHER = 'TEACHER',
-  STUDENT = 'STUDENT'
+  STUDENT = 'STUDENT',
+  DEPT_HEAD = 'DEPT_HEAD'
 }
 
 export interface User {
@@ -15,6 +16,12 @@ export interface User {
   year?: string;
   section?: string;
   rollNumber?: string;
+}
+
+export interface Department {
+  id: string;
+  name: string;
+  code: string;
 }
 
 export interface Subject {

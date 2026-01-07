@@ -23,7 +23,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     if (foundUser) {
       onLogin(foundUser);
     } else {
-      setError('Invalid email or password. Try admin@college.edu / password');
+      setError('Invalid email or password.');
     }
   };
 
@@ -82,12 +82,6 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             Sign In
           </button>
         </form>
-
-        <div className="mt-8 pt-8 border-t text-center text-xs text-slate-400 space-y-1">
-          <p>Demo Admin: admin@college.edu / password</p>
-          <p>Demo Teacher: sarah@college.edu / password</p>
-          <p>Demo Student: john@college.edu / password</p>
-        </div>
       </div>
     </div>
   );

@@ -1,11 +1,12 @@
 
-import { User, UserRole, AttendanceSession, AttendanceRecord, Subject } from './types';
+import { User, UserRole, AttendanceSession, AttendanceRecord, Subject, Department } from './types';
 
 const STORAGE_KEYS = {
   USERS: 'qra_users',
   SESSIONS: 'qra_sessions',
   RECORDS: 'qra_records',
-  SUBJECTS: 'qra_subjects'
+  SUBJECTS: 'qra_subjects',
+  DEPARTMENTS: 'qra_departments'
 };
 
 export class Database {
@@ -42,6 +43,21 @@ export class Database {
     this.set(STORAGE_KEYS.USERS, users);
   }
 
+  // Department Methods
+  static getDepartments(): Department[] {
+    return this.get<Department>(STORAGE_KEYS.DEPARTMENTS);
+  }
+
+  static addDepartment(dept: Department): void {
+    const depts = this.getDepartments();
+    this.set(STORAGE_KEYS.DEPARTMENTS, [...depts, dept]);
+  }
+
+  static deleteDepartment(id: string): void {
+    const depts = this.getDepartments().filter(d => d.id !== id);
+    this.set(STORAGE_KEYS.DEPARTMENTS, depts);
+  }
+
   // Subject Methods
   static getSubjects(): Subject[] {
     return this.get<Subject>(STORAGE_KEYS.SUBJECTS);
@@ -73,12 +89,22 @@ export class Database {
   }
 
   static seed(): void {
+    if (this.getDepartments().length === 0) {
+      const initialDepts: Department[] = [
+        { id: 'd1', name: 'Computer Science', code: 'CS' },
+        { id: 'd2', name: 'Electrical Engineering', code: 'EE' },
+        { id: 'd3', name: 'Mechanical Engineering', code: 'ME' }
+      ];
+      this.set(STORAGE_KEYS.DEPARTMENTS, initialDepts);
+    }
+
     if (this.getUsers().length === 0) {
       const initialUsers: User[] = [
         { id: '1', name: 'System Admin', email: 'admin@college.edu', role: UserRole.ADMIN, password: 'password' },
         { id: '2', name: 'Dr. Sarah Johnson', email: 'sarah@college.edu', role: UserRole.TEACHER, department: 'CS', password: 'password' },
         { id: '3', name: 'John Doe', email: 'john@college.edu', role: UserRole.STUDENT, department: 'CS', year: '3rd', section: 'A', rollNumber: 'CS301', password: 'password' },
-        { id: '4', name: 'Jane Smith', email: 'jane@college.edu', role: UserRole.STUDENT, department: 'CS', year: '3rd', section: 'A', rollNumber: 'CS302', password: 'password' }
+        { id: '4', name: 'Jane Smith', email: 'jane@college.edu', role: UserRole.STUDENT, department: 'CS', year: '3rd', section: 'A', rollNumber: 'CS302', password: 'password' },
+        { id: '5', name: 'Prof. Alan Turring', email: 'hod@college.edu', role: UserRole.DEPT_HEAD, department: 'CS', password: 'password' }
       ];
       this.set(STORAGE_KEYS.USERS, initialUsers);
 
@@ -88,6 +114,44 @@ export class Database {
         { id: 's3', name: 'Web Development', code: 'CS301', department: 'CS' }
       ];
       this.set(STORAGE_KEYS.SUBJECTS, initialSubjects);
+
+      // Seed some mock sessions and records for the HOD to see data immediately
+      const now = Date.now();
+      const mockSessions: AttendanceSession[] = [
+        {
+          id: 'mock-s1',
+          teacherId: '2',
+          subjectId: 's1',
+          department: 'CS',
+          year: '3rd',
+          section: 'A',
+          period: '1',
+          startTime: now - (2 * 24 * 60 * 60 * 1000), // 2 days ago
+          expiryTime: now - (2 * 24 * 60 * 60 * 1000) + (10 * 60 * 1000),
+          qrPayload: 'MOCK_QR_1'
+        },
+        {
+          id: 'mock-s2',
+          teacherId: '2',
+          subjectId: 's3',
+          department: 'CS',
+          year: '3rd',
+          section: 'A',
+          period: '2',
+          startTime: now - (1 * 24 * 60 * 60 * 1000), // 1 day ago
+          expiryTime: now - (1 * 24 * 60 * 60 * 1000) + (10 * 60 * 1000),
+          qrPayload: 'MOCK_QR_2'
+        }
+      ];
+      this.set(STORAGE_KEYS.SESSIONS, mockSessions);
+
+      const mockRecords: AttendanceRecord[] = [
+        { id: 'mr1', sessionId: 'mock-s1', studentId: '3', timestamp: now - (2 * 24 * 60 * 60 * 1000) + 1000 },
+        { id: 'mr2', sessionId: 'mock-s1', studentId: '4', timestamp: now - (2 * 24 * 60 * 60 * 1000) + 2000 },
+        { id: 'mr3', sessionId: 'mock-s2', studentId: '3', timestamp: now - (1 * 24 * 60 * 60 * 1000) + 1500 },
+        { id: 'mr4', sessionId: 'mock-s2', studentId: '4', timestamp: now - (1 * 24 * 60 * 60 * 1000) + 2500 }
+      ];
+      this.set(STORAGE_KEYS.RECORDS, mockRecords);
     }
   }
 }

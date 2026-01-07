@@ -6,6 +6,7 @@ import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import TeacherDashboard from './components/TeacherDashboard';
 import StudentDashboard from './components/StudentDashboard';
+import DeptHeadDashboard from './components/DeptHeadDashboard';
 import Navbar from './components/Navbar';
 
 const App: React.FC = () => {
@@ -48,6 +49,7 @@ const App: React.FC = () => {
       <Navbar user={user} onLogout={handleLogout} />
       <main className="flex-1 container mx-auto px-4 py-8">
         {user.role === UserRole.ADMIN && <AdminDashboard />}
+        {user.role === UserRole.DEPT_HEAD && <DeptHeadDashboard hod={user} />}
         {user.role === UserRole.TEACHER && <TeacherDashboard teacher={user} />}
         {user.role === UserRole.STUDENT && <StudentDashboard student={user} />}
       </main>

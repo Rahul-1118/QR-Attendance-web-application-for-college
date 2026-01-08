@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Database } from '../store';
 import { User, UserRole, Subject, AttendanceSession, AttendanceRecord, Department } from '../types';
-import { QrCode, ClipboardList, Timer, CheckCircle2, XCircle, Share2, Users, X, Search, UserPlus, RefreshCw } from 'lucide-react';
+import { QrCode, ClipboardList, Timer, CheckCircle2, XCircle, Share2, Users, X, Search, UserPlus, RefreshCw, Trash2 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 
 interface TeacherDashboardProps {
@@ -39,7 +39,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ teacher }) => {
   useEffect(() => {
     const pollInterval = setInterval(() => {
       setAllRecords(Database.getRecords());
-    }, 3000);
+    }, 2000);
     return () => clearInterval(pollInterval);
   }, []);
 
@@ -82,19 +82,29 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ teacher }) => {
   };
 
   const handleFinalizeSession = (isAuto: boolean = false) => {
-    if (!isAuto && !window.confirm('Check and Submit: Close the session?')) return;
+    if (!isAuto && !window.confirm('Submit and close the current session?')) return;
     setActiveSession(null);
     setTimeLeft(0);
     setAllRecords(Database.getRecords());
     if (isAuto) alert('Time up! Session automatically submitted.');
-    else alert('Session finalized.');
+    else alert('Attendance session closed successfully.');
   };
 
   const handleCancelSession = () => {
-    if (window.confirm('Cancel session? Previous scans are saved.')) {
+    if (window.confirm('Cancel session? Recorded scans will be kept.')) {
       setActiveSession(null);
       setTimeLeft(0);
     }
+  };
+
+  // FOR DEMO: Clear records for active session
+  const clearSessionRecords = () => {
+    if (!activeSession) return;
+    if (!window.confirm("Delete all attendance records for this LIVE session? (Demo Purposes)")) return;
+    const records = Database.getRecords();
+    const newRecords = records.filter(r => r.sessionId !== activeSession.id);
+    localStorage.setItem('qra_records', JSON.stringify(newRecords));
+    setAllRecords(newRecords);
   };
 
   const handleSearchStudent = () => {
@@ -117,7 +127,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ teacher }) => {
 
     Database.addRecord(newRecord);
     setAllRecords(Database.getRecords());
-    alert(`Success for ${manualFoundStudent.name}`);
+    alert(`Attendance marked for ${manualFoundStudent.name}`);
     setManualRollNo('');
     setManualFoundStudent(null);
   };
@@ -158,7 +168,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ teacher }) => {
       {view === 'generate' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 h-fit">
-            <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2"><ClipboardList size={20} className="text-indigo-600" /> Parameters</h3>
+            <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2"><ClipboardList size={20} className="text-indigo-600" /> Class Parameters</h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Subject</label>
@@ -196,15 +206,15 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ teacher }) => {
                 </div>
               </div>
               {!activeSession ? (
-                <button onClick={handleGenerateQR} className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl shadow-lg flex items-center justify-center gap-2"><QrCode size={20} /> Start QR Session</button>
+                <button onClick={handleGenerateQR} className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all hover:bg-indigo-700 active:scale-95"><QrCode size={20} /> Start QR Session</button>
               ) : (
                 <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl">
                   <div className="flex items-center justify-between text-indigo-700 font-bold mb-2">
-                    <span className="flex items-center gap-1.5"><Timer size={18} /> Active</span>
+                    <span className="flex items-center gap-1.5 uppercase text-[10px] tracking-wider"><Timer size={14} /> Time Remaining</span>
                     <span className="text-lg font-mono">{formatTime(timeLeft)}</span>
                   </div>
-                  <div className="w-full bg-indigo-200 h-1.5 rounded-full overflow-hidden">
-                    <div className="h-full bg-indigo-600" style={{width: `${(timeLeft / 600) * 100}%`}}></div>
+                  <div className="w-full bg-indigo-200 h-1 rounded-full overflow-hidden">
+                    <div className="h-full bg-indigo-600 transition-all duration-1000" style={{width: `${(timeLeft / 600) * 100}%`}}></div>
                   </div>
                 </div>
               )}
@@ -212,38 +222,49 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ teacher }) => {
           </div>
 
           <div className="space-y-6">
-            <div className="bg-white p-8 rounded-2xl border border-slate-100 flex flex-col items-center text-center">
+            <div className="bg-white p-8 rounded-2xl border border-slate-100 flex flex-col items-center text-center shadow-sm">
               {activeSession ? (
                 <>
-                  <QRCodeSVG value={activeSession.qrPayload} size={250} level="H" includeMargin />
+                  <div className="p-4 bg-white border-4 border-indigo-50 rounded-3xl shadow-xl">
+                    <QRCodeSVG value={activeSession.qrPayload} size={300} level="H" includeMargin={true} />
+                  </div>
+                  <p className="mt-4 text-[10px] text-slate-400 font-bold uppercase tracking-widest">Scanning is active for students</p>
                   <div className="flex gap-3 mt-8">
-                    <button onClick={() => handleFinalizeSession(false)} className="px-6 py-3 bg-green-600 text-white rounded-xl font-bold flex items-center gap-2"><CheckCircle2 size={18} /> Check & Submit</button>
-                    <button onClick={handleCancelSession} className="px-4 py-3 bg-slate-50 text-slate-400 rounded-xl"><X size={18} /></button>
+                    <button onClick={() => handleFinalizeSession(false)} className="px-6 py-3 bg-green-600 text-white rounded-xl font-bold flex items-center gap-2 hover:bg-green-700 shadow-lg shadow-green-100 active:scale-95"><CheckCircle2 size={18} /> Finalize</button>
+                    <button onClick={clearSessionRecords} className="px-4 py-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors active:scale-95" title="Clear Demo Records"><Trash2 size={18} /></button>
+                    <button onClick={handleCancelSession} className="px-4 py-3 bg-slate-100 text-slate-500 rounded-xl hover:text-red-500 hover:bg-red-50 transition-colors active:scale-95"><X size={18} /></button>
                   </div>
                 </>
               ) : (
-                <div className="py-20 flex flex-col items-center">
-                  <QrCode size={40} className="text-slate-300 mb-4" />
-                  <p className="text-slate-400 font-medium">QR code will appear here</p>
+                <div className="py-20 flex flex-col items-center opacity-40">
+                  <QrCode size={64} className="text-slate-300 mb-4" />
+                  <p className="text-slate-400 font-medium max-w-[200px]">Select parameters and start the class to display QR code</p>
                 </div>
               )}
             </div>
 
-            <div className="bg-white p-6 rounded-2xl border border-slate-100">
-              <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Users size={18} className="text-indigo-600" /> Attendance ({currentSessionRecords.length}/{activeStudents.length})</h3>
-              <div className="max-h-48 overflow-y-auto space-y-2">
-                {activeStudents.map(student => {
-                  const isPresent = currentSessionRecords.some(r => r.studentId === student.id);
-                  return (
-                    <div key={student.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold ${isPresent ? 'bg-green-100 text-green-600' : 'bg-slate-200 text-slate-400'}`}>{student.name.charAt(0)}</div>
-                        <div><p className={`text-sm font-bold ${isPresent ? 'text-slate-800' : 'text-slate-400'}`}>{student.name}</p></div>
+            <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+              <h3 className="font-bold text-slate-800 mb-4 flex items-center justify-between">
+                <span className="flex items-center gap-2"><Users size={18} className="text-indigo-600" /> Scans Detected</span>
+                <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded-full">{currentSessionRecords.length} / {activeStudents.length}</span>
+              </h3>
+              <div className="max-h-48 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                {activeStudents.length > 0 ? (
+                  activeStudents.map(student => {
+                    const isPresent = currentSessionRecords.some(r => r.studentId === student.id);
+                    return (
+                      <div key={student.id} className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${isPresent ? 'bg-green-50 border-green-100' : 'bg-slate-50 border-slate-100'}`}>
+                        <div className="flex items-center gap-3">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold ${isPresent ? 'bg-green-500 text-white' : 'bg-slate-200 text-slate-400'}`}>{student.name.charAt(0)}</div>
+                          <div><p className={`text-sm font-bold ${isPresent ? 'text-slate-800' : 'text-slate-400'}`}>{student.name}</p></div>
+                        </div>
+                        {isPresent ? <CheckCircle2 size={16} className="text-green-500" /> : <XCircle size={16} className="text-slate-200" />}
                       </div>
-                      {isPresent ? <CheckCircle2 size={16} className="text-green-500" /> : <XCircle size={16} className="text-slate-200" />}
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                ) : (
+                  <p className="text-center py-4 text-xs text-slate-400 italic">No students in this batch.</p>
+                )}
               </div>
             </div>
           </div>
@@ -252,17 +273,17 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ teacher }) => {
 
       {view === 'manual' && (
         <div className="max-w-2xl mx-auto space-y-6">
-          <div className="bg-white p-8 rounded-3xl border border-slate-100">
+          <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
             <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><UserPlus className="text-indigo-600" /> Manual Entry</h2>
             <div className="flex gap-2 mb-6">
-              <input type="text" placeholder="Roll Number (e.g. CS301)" className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl" value={manualRollNo} onChange={(e) => setManualRollNo(e.target.value.toUpperCase())} />
-              <button onClick={handleSearchStudent} className="bg-indigo-600 text-white px-8 rounded-xl font-bold hover:bg-indigo-700">Search</button>
+              <input type="text" placeholder="Roll Number (e.g. CS301)" className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" value={manualRollNo} onChange={(e) => setManualRollNo(e.target.value.toUpperCase())} />
+              <button onClick={handleSearchStudent} className="bg-indigo-600 text-white px-8 rounded-xl font-bold hover:bg-indigo-700 transition-all">Search</button>
             </div>
             {manualFoundStudent && (
-              <div className="p-6 bg-indigo-50/50 rounded-2xl border border-indigo-100">
+              <div className="p-6 bg-indigo-50/50 rounded-2xl border border-indigo-100 animate-in fade-in slide-in-from-top-4 duration-300">
                 <div className="flex items-center gap-4 mb-8">
-                  <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center text-2xl font-bold text-indigo-600 border border-indigo-100">{manualFoundStudent.name.charAt(0)}</div>
-                  <div><h4 className="font-bold text-slate-800 text-xl">{manualFoundStudent.name}</h4><p className="text-slate-500 text-sm">Roll: {manualFoundStudent.rollNumber}</p></div>
+                  <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center text-2xl font-bold text-indigo-600 border border-indigo-100 shadow-sm">{manualFoundStudent.name.charAt(0)}</div>
+                  <div><h4 className="font-bold text-slate-800 text-xl">{manualFoundStudent.name}</h4><p className="text-slate-500 text-sm font-medium">Roll: {manualFoundStudent.rollNumber} | {manualFoundStudent.year} Year</p></div>
                 </div>
                 <div className="grid grid-cols-2 gap-4 mb-8">
                   <div>
@@ -279,7 +300,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({ teacher }) => {
                     </select>
                   </div>
                 </div>
-                <button onClick={handleSubmitManual} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2">Submit Manual Attendance</button>
+                <button onClick={handleSubmitManual} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all active:scale-[0.98]">Submit Manual Attendance</button>
               </div>
             )}
           </div>

@@ -115,20 +115,19 @@ export class Database {
       ];
       this.set(STORAGE_KEYS.SUBJECTS, initialSubjects);
 
-      // Seed some mock sessions and records for the HOD to see data immediately
       const now = Date.now();
       const mockSessions: AttendanceSession[] = [
         {
-          id: 'mock-s1',
+          id: 'active-demo-session',
           teacherId: '2',
           subjectId: 's1',
           department: 'CS',
           year: '3rd',
           section: 'A',
           period: '1',
-          startTime: now - (2 * 24 * 60 * 60 * 1000), // 2 days ago
-          expiryTime: now - (2 * 24 * 60 * 60 * 1000) + (10 * 60 * 1000),
-          qrPayload: 'MOCK_QR_1'
+          startTime: now,
+          expiryTime: now + (24 * 60 * 60 * 1000), // Active for 24 hours for demo purposes
+          qrPayload: 'DEMO_QR_ACTIVE'
         },
         {
           id: 'mock-s2',
@@ -138,7 +137,7 @@ export class Database {
           year: '3rd',
           section: 'A',
           period: '2',
-          startTime: now - (1 * 24 * 60 * 60 * 1000), // 1 day ago
+          startTime: now - (1 * 24 * 60 * 60 * 1000), 
           expiryTime: now - (1 * 24 * 60 * 60 * 1000) + (10 * 60 * 1000),
           qrPayload: 'MOCK_QR_2'
         }
@@ -146,8 +145,6 @@ export class Database {
       this.set(STORAGE_KEYS.SESSIONS, mockSessions);
 
       const mockRecords: AttendanceRecord[] = [
-        { id: 'mr1', sessionId: 'mock-s1', studentId: '3', timestamp: now - (2 * 24 * 60 * 60 * 1000) + 1000 },
-        { id: 'mr2', sessionId: 'mock-s1', studentId: '4', timestamp: now - (2 * 24 * 60 * 60 * 1000) + 2000 },
         { id: 'mr3', sessionId: 'mock-s2', studentId: '3', timestamp: now - (1 * 24 * 60 * 60 * 1000) + 1500 },
         { id: 'mr4', sessionId: 'mock-s2', studentId: '4', timestamp: now - (1 * 24 * 60 * 60 * 1000) + 2500 }
       ];

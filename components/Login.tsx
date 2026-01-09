@@ -36,13 +36,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     if (foundUser) {
       onLogin(foundUser);
     } else {
-      setError('Invalid email or password. Please check the credentials below.');
+      setError('Invalid email or password. Please check your credentials.');
     }
-  };
-
-  const fillCredential = (e: string) => {
-    setEmail(e);
-    setPassword('password');
   };
 
   return (
@@ -116,26 +111,6 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             )}
           </button>
         </form>
-
-        <div className="mt-8 pt-6 border-t border-slate-100">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-center mb-4">Demo Credentials (Password: password)</p>
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              { label: 'Admin', email: 'admin@college.edu' },
-              { label: 'Teacher', email: 'sarah@college.edu' },
-              { label: 'Student', email: 'john@college.edu' },
-              { label: 'HOD', email: 'hod@college.edu' }
-            ].map((cred) => (
-              <button
-                key={cred.email}
-                onClick={() => fillCredential(cred.email)}
-                className="text-[10px] bg-slate-50 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 py-2 px-1 rounded-lg border border-slate-200 transition-colors font-semibold"
-              >
-                {cred.label}
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
       <style>{`
         @keyframes loading {

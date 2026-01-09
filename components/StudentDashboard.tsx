@@ -26,7 +26,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
   const streamRef = useRef<MediaStream | null>(null);
   const requestRef = useRef<number | null>(null);
 
-  // Refs to avoid stale closures and manage loop control
+  // Refs for high-speed access in the scan loop without triggering re-renders
   const activeSessionRef = useRef<AttendanceSession | null>(null);
   const isMarkedRef = useRef<boolean>(false);
   const isLoopActive = useRef<boolean>(false);
@@ -39,6 +39,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
     return () => clearInterval(timer);
   }, []);
 
+  // Find session matching student's exact batch
   const activeSessionForMe = useMemo(() => {
     const studentDept = Database.normalize(student.department);
     const studentYear = Database.normalize(student.year);
@@ -57,14 +58,9 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
     return records.some(r => r.sessionId === activeSessionForMe.id && r.studentId === student.id);
   }, [activeSessionForMe, records, student.id]);
 
-  // Keep refs in sync for the high-frequency scanning loop
-  useEffect(() => {
-    activeSessionRef.current = activeSessionForMe;
-  }, [activeSessionForMe]);
-
-  useEffect(() => {
-    isMarkedRef.current = isMarked;
-  }, [isMarked]);
+  // Sync refs with state/memo
+  useEffect(() => { activeSessionRef.current = activeSessionForMe; }, [activeSessionForMe]);
+  useEffect(() => { isMarkedRef.current = isMarked; }, [isMarked]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -75,8 +71,10 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
     }
   };
 
-  const handleFinalizeAttendance = async (session: AttendanceSession) => {
-    // Immediate loop block
+  const handleProcessAttendance = async (session: AttendanceSession) => {
+    if (isProcessing) return;
+    
+    // Kill loop immediately to prevent double processing
     isLoopActive.current = false;
     setIsProcessing(true);
     
@@ -87,20 +85,22 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
         studentId: student.id,
         timestamp: Date.now()
       });
-      setScanResult({ success: true, message: 'Presence Verified Successfully!' });
       
-      // Keep result visible for feedback then close scanner
+      setScanResult({ success: true, message: 'Attendance Recorded!' });
+      
+      // Auto-close scanner after success feedback
       setTimeout(() => {
         setIsScannerOpen(false);
         setScanResult(null);
+        setIsProcessing(false);
       }, 2500);
     } catch (err) {
-      setScanResult({ success: false, message: 'Submission failed. Please try again.' });
-      // Re-enable loop if failed
+      console.error("Attendance submission failed:", err);
+      setScanResult({ success: false, message: 'Failed to sync with server. Try again.' });
+      setIsProcessing(false);
+      // Resume loop on failure
       isLoopActive.current = true;
       requestRef.current = requestAnimationFrame(tick);
-    } finally {
-      setIsProcessing(false);
     }
   };
 
@@ -115,30 +115,37 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
       const canvas = canvasElement.getContext("2d", { willReadFrequently: true });
       if (!canvas) return;
 
+      // Match canvas to actual video stream resolution
       canvasElement.height = video.videoHeight;
       canvasElement.width = video.videoWidth;
+      
+      // Draw frame
       canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
       
+      // Analyze frame for QR
       const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+      const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: "dontInvert",
+      });
       
       if (code && code.data) {
         const session = activeSessionRef.current;
-        // Verify code matches current active session for this batch
+        // Check if QR matches current live session for this specific student
         if (session && code.data === session.qrPayload) {
-           if (!isMarkedRef.current) {
-             handleFinalizeAttendance(session);
-             return; // Break the loop
-           } else {
-             // Already marked - close scanner with info
-             setScanResult({ success: true, message: 'You are already marked for this class.' });
-             isLoopActive.current = false;
-             setTimeout(() => setIsScannerOpen(false), 2000);
-             return;
-           }
+          if (!isMarkedRef.current) {
+            handleProcessAttendance(session);
+            return; // Exit loop
+          } else {
+            setScanResult({ success: true, message: 'Attendance already marked for this session.' });
+            isLoopActive.current = false;
+            setTimeout(() => setIsScannerOpen(false), 2000);
+            return;
+          }
         }
       }
     }
+    
+    // Request next frame
     requestRef.current = requestAnimationFrame(tick);
   };
 
@@ -150,7 +157,6 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
         streamRef.current.getTracks().forEach(t => t.stop());
         streamRef.current = null;
       }
-      setScanResult(null);
       return;
     }
 
@@ -158,12 +164,12 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
     setCameraError(null);
     setIsInitializing(true);
 
-    const initCamera = async () => {
+    const startCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { 
-            facingMode: 'environment', 
-            width: { ideal: 1280 }, 
+            facingMode: 'environment',
+            width: { ideal: 1280 },
             height: { ideal: 720 }
           } 
         }).catch(() => navigator.mediaDevices.getUserMedia({ video: true }));
@@ -181,14 +187,14 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
         }
       } catch (err: any) {
         if (isMounted) {
-          console.error("Camera Init Error:", err);
-          setCameraError("Unable to access camera. Please ensure permissions are granted.");
+          console.error("Camera access failed:", err);
+          setCameraError("Camera permission denied or hardware unavailable.");
           setIsInitializing(false);
         }
       }
     };
 
-    initCamera();
+    startCamera();
 
     return () => { 
       isMounted = false; 
@@ -272,7 +278,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
         <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50 space-y-8">
           <div className="flex justify-between items-center px-2">
             <h3 className="font-black text-slate-800 tracking-tight flex items-center gap-2 uppercase text-xs">
-              <Zap size={16} className="text-indigo-600 fill-indigo-600" /> Active Session Finder
+              <Zap size={16} className="text-indigo-600 fill-indigo-600" /> Live Detection
             </h3>
             <button 
               onClick={handleManualRefresh} 
@@ -296,7 +302,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
               </div>
 
               <h4 className="font-black text-slate-800 text-3xl mb-2">
-                {subjects.find(s => s.id === activeSessionForMe.subjectId)?.name || "Live Class"}
+                {subjects.find(s => s.id === activeSessionForMe.subjectId)?.name || "Class Session"}
               </h4>
               <p className="text-slate-400 font-bold text-sm mb-10 flex items-center justify-center gap-2">
                 <Clock size={16} className="text-indigo-400" /> Period {activeSessionForMe.period} • {activeSessionForMe.department}
@@ -307,7 +313,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
                   onClick={() => setIsScannerOpen(true)} 
                   className="w-full max-w-sm mx-auto bg-indigo-600 text-white py-6 rounded-[2rem] font-black flex items-center justify-center gap-3 shadow-[0_20px_40px_rgba(79,70,229,0.3)] hover:bg-indigo-700 transition-all active:scale-[0.98] uppercase tracking-widest text-sm"
                 >
-                  <Camera size={24} /> Point & Scan QR
+                  <Camera size={24} /> Point & Scan Faculty QR
                 </button>
               ) : (
                 <div className="space-y-6">
@@ -315,7 +321,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
                     <CheckCircle size={24} /> Verified Present
                   </div>
                   <button onClick={resetAttendanceForDemo} className="text-[10px] text-slate-300 hover:text-indigo-600 uppercase font-black tracking-[0.2em] transition-colors">
-                    Reset For Demo
+                    Reset For Testing
                   </button>
                 </div>
               )}
@@ -325,9 +331,9 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
               <div className="w-24 h-24 bg-white rounded-[2rem] flex items-center justify-center mb-8 text-slate-200 shadow-inner">
                 <Smartphone size={48} />
               </div>
-              <p className="font-black text-slate-500 text-xl mb-4">No Active Session Found</p>
+              <p className="font-black text-slate-500 text-xl mb-4">No Session Found for Your Batch</p>
               <div className="p-6 bg-white border border-slate-100 rounded-[2rem] text-xs text-slate-400 space-y-2 shadow-sm">
-                <p className="uppercase font-black tracking-widest opacity-60">Batch Monitoring</p>
+                <p className="uppercase font-black tracking-widest opacity-60">Your Registered Details</p>
                 <div className="flex gap-3 justify-center font-black text-indigo-600 uppercase text-sm">
                   <span>{student.department}</span>
                   <span className="opacity-20">•</span>
@@ -337,7 +343,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
                 </div>
               </div>
               <p className="text-[10px] text-slate-300 mt-10 max-w-[320px] leading-relaxed italic font-medium">
-                Active sessions for your specific batch will appear here automatically.
+                Wait for your teacher to generate the QR code. Sessions will appear here instantly.
               </p>
             </div>
           )}
@@ -356,7 +362,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
           {attendanceData.subjectStats.length === 0 ? (
             <div className="py-24 text-center text-slate-300 bg-slate-50/50 rounded-[2.5rem] border-2 border-dashed">
               <BarChart3 size={64} className="mx-auto mb-6 opacity-10" />
-              <p className="text-sm font-black uppercase tracking-widest">No activity for this month</p>
+              <p className="text-sm font-black uppercase tracking-widest">No history for this month</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -393,15 +399,10 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
                 </div>
                 <div className="space-y-2">
                   <h3 className={`text-2xl font-black tracking-tight ${scanResult.success ? 'text-green-600' : 'text-red-600'}`}>
-                    {scanResult.success ? 'Scan Successful' : 'Scan Failure'}
+                    {scanResult.success ? 'Attendance Submitted' : 'Sync Error'}
                   </h3>
                   <p className="text-slate-500 font-bold">{scanResult.message}</p>
                 </div>
-                {scanResult.success && (
-                   <div className="p-4 bg-slate-50 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center justify-center gap-2">
-                     <Loader2 size={14} className="animate-spin" /> Auto-Closing...
-                   </div>
-                )}
               </div>
             ) : (
               <>
@@ -422,14 +423,14 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
                         <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
                         <Camera className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-indigo-500" size={24} />
                       </div>
-                      <p className="text-xs font-black uppercase tracking-[0.2em] animate-pulse">Initializing Vision...</p>
+                      <p className="text-xs font-black uppercase tracking-[0.2em] animate-pulse">Vision Syncing...</p>
                     </div>
                   )}
 
                   {isProcessing && (
-                    <div className="absolute inset-0 bg-indigo-600/80 backdrop-blur-md flex flex-col items-center justify-center text-white gap-4">
+                    <div className="absolute inset-0 bg-indigo-600/90 backdrop-blur-md flex flex-col items-center justify-center text-white gap-4">
                       <Loader2 className="animate-spin" size={48} />
-                      <p className="font-black uppercase tracking-widest text-xs">Finalizing Attendance...</p>
+                      <p className="font-black uppercase tracking-widest text-xs">Authenticating...</p>
                     </div>
                   )}
 
@@ -440,7 +441,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
                         <p className="font-black text-lg">Camera Error</p>
                         <p className="text-slate-400 text-xs font-medium leading-relaxed">{cameraError}</p>
                       </div>
-                      <button onClick={() => setIsScannerOpen(false)} className="px-8 py-4 bg-indigo-600 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-indigo-500/20">Go Back</button>
+                      <button onClick={() => setIsScannerOpen(false)} className="px-8 py-4 bg-indigo-600 rounded-2xl text-[10px] font-black uppercase tracking-widest">Go Back</button>
                     </div>
                   )}
                 </div>
@@ -448,10 +449,12 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
                 <div className="text-center space-y-4">
                   <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-white/5 rounded-full border border-white/10 text-white">
                      <span className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></span>
-                     <p className="font-black tracking-[0.3em] uppercase text-[10px] opacity-80">Scanning Faculty QR</p>
+                     <p className="font-black tracking-[0.3em] uppercase text-[10px] opacity-80">
+                        Analyzing: {subjects.find(s => s.id === activeSessionForMe?.subjectId)?.name || "Live Session"}
+                     </p>
                   </div>
                   <p className="text-slate-400 text-sm max-w-[280px] font-medium leading-relaxed">
-                    Point your camera at the teacher's QR code. Recognition and submission happens <span className="text-indigo-400 font-black uppercase">instantly</span>.
+                    Point camera at the teacher's screen. Attendance is processed <span className="text-indigo-400 font-black uppercase">automatically</span>.
                   </p>
                 </div>
               </>

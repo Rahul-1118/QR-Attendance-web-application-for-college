@@ -1,518 +1,474 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Database } from '../store';
+import { Database, useDatabase } from '../store';
 import { User, AttendanceSession, AttendanceRecord, Subject } from '../types';
-import { Calendar, CheckCircle, Clock, History, Camera, UserCheck, AlertTriangle, ChevronLeft, ChevronRight, BarChart3, Info, Wifi, WifiOff, X, ScanLine, RefreshCcw, Loader2 } from 'lucide-react';
+import { CheckCircle, Clock, History, Camera, UserCheck, AlertTriangle, ChevronLeft, ChevronRight, BarChart3, X, ScanLine, RefreshCcw, Loader2, Zap, Smartphone, ArrowRight, Sparkles } from 'lucide-react';
+import jsQR from 'jsqr';
 
 interface StudentDashboardProps {
   student: User;
 }
 
 const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
+  const { sessions, records, subjects } = useDatabase();
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [scanResult, setScanResult] = useState<{success: boolean, message: string} | null>(null);
   const [activeTab, setActiveTab] = useState<'scan' | 'monthly'>('scan');
-  const [autoScanProgress, setAutoScanProgress] = useState(0);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
+  const [now, setNow] = useState(Date.now());
+
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const requestRef = useRef<number | null>(null);
+
+  // Refs to avoid stale closures and manage loop control
+  const activeSessionRef = useRef<AttendanceSession | null>(null);
+  const isMarkedRef = useRef<boolean>(false);
+  const isLoopActive = useRef<boolean>(false);
 
   const [viewDate, setViewDate] = useState(new Date());
   const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-  const activeSessionForMe = useMemo(() => {
-    const sessions = Database.getSessions();
-    return sessions.find(s => 
-      s.department === student.department &&
-      s.year === student.year &&
-      s.section === student.section &&
-      s.expiryTime > Date.now()
-    );
-  }, [student, scanResult]);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
-  const checkAlreadyMarked = () => {
+  const activeSessionForMe = useMemo(() => {
+    const studentDept = Database.normalize(student.department);
+    const studentYear = Database.normalize(student.year);
+    const studentSec = Database.normalize(student.section);
+
+    return sessions.find(s => 
+      Database.normalize(s.department) === studentDept &&
+      Database.normalize(s.year) === studentYear &&
+      Database.normalize(s.section) === studentSec &&
+      s.expiryTime > now
+    );
+  }, [student, sessions, now]);
+
+  const isMarked = useMemo(() => {
     if (!activeSessionForMe) return false;
-    const records = Database.getRecords();
     return records.some(r => r.sessionId === activeSessionForMe.id && r.studentId === student.id);
+  }, [activeSessionForMe, records, student.id]);
+
+  // Keep refs in sync for the high-frequency scanning loop
+  useEffect(() => {
+    activeSessionRef.current = activeSessionForMe;
+  }, [activeSessionForMe]);
+
+  useEffect(() => {
+    isMarkedRef.current = isMarked;
+  }, [isMarked]);
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await Database.init();
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 800);
+    }
   };
 
-  const isMarked = checkAlreadyMarked();
+  const handleFinalizeAttendance = async (session: AttendanceSession) => {
+    // Immediate loop block
+    isLoopActive.current = false;
+    setIsProcessing(true);
+    
+    try {
+      await Database.addRecord({
+        id: Math.random().toString(36).substr(2, 9),
+        sessionId: session.id,
+        studentId: student.id,
+        timestamp: Date.now()
+      });
+      setScanResult({ success: true, message: 'Presence Verified Successfully!' });
+      
+      // Keep result visible for feedback then close scanner
+      setTimeout(() => {
+        setIsScannerOpen(false);
+        setScanResult(null);
+      }, 2500);
+    } catch (err) {
+      setScanResult({ success: false, message: 'Submission failed. Please try again.' });
+      // Re-enable loop if failed
+      isLoopActive.current = true;
+      requestRef.current = requestAnimationFrame(tick);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
-  // Camera Initialization
+  const tick = () => {
+    if (!isLoopActive.current || !isScannerOpen) return;
+
+    if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+      const video = videoRef.current;
+      const canvasElement = canvasRef.current;
+      if (!canvasElement) return;
+      
+      const canvas = canvasElement.getContext("2d", { willReadFrequently: true });
+      if (!canvas) return;
+
+      canvasElement.height = video.videoHeight;
+      canvasElement.width = video.videoWidth;
+      canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+      
+      const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+      
+      if (code && code.data) {
+        const session = activeSessionRef.current;
+        // Verify code matches current active session for this batch
+        if (session && code.data === session.qrPayload) {
+           if (!isMarkedRef.current) {
+             handleFinalizeAttendance(session);
+             return; // Break the loop
+           } else {
+             // Already marked - close scanner with info
+             setScanResult({ success: true, message: 'You are already marked for this class.' });
+             isLoopActive.current = false;
+             setTimeout(() => setIsScannerOpen(false), 2000);
+             return;
+           }
+        }
+      }
+    }
+    requestRef.current = requestAnimationFrame(tick);
+  };
+
   useEffect(() => {
-    if (!isScannerOpen) return;
+    if (!isScannerOpen) {
+      isLoopActive.current = false;
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
+      setScanResult(null);
+      return;
+    }
 
     let isMounted = true;
     setCameraError(null);
     setIsInitializing(true);
-    setAutoScanProgress(0);
 
     const initCamera = async () => {
       try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error("Your browser does not support camera access.");
-        }
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { 
+            facingMode: 'environment', 
+            width: { ideal: 1280 }, 
+            height: { ideal: 720 }
+          } 
+        }).catch(() => navigator.mediaDevices.getUserMedia({ video: true }));
 
-        // Try environment camera first
-        const constraints: MediaStreamConstraints = { 
-          video: { facingMode: 'environment' } 
-        };
-        
-        let stream: MediaStream;
-        try {
-          stream = await navigator.mediaDevices.getUserMedia(constraints);
-        } catch (e) {
-          console.warn("Environment camera failed, trying default", e);
-          // Fallback to any available camera
-          stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        }
-        
         if (isMounted) {
           streamRef.current = stream;
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
-            // Force play and stop initializing spinner
-            try {
-              await videoRef.current.play();
-            } catch (playErr) {
-              console.error("Autoplay blocked:", playErr);
-            }
+            videoRef.current.setAttribute("playsinline", "true");
+            await videoRef.current.play();
             setIsInitializing(false);
+            isLoopActive.current = true;
+            requestRef.current = requestAnimationFrame(tick);
           }
         }
       } catch (err: any) {
-        console.error("Camera Error:", err);
         if (isMounted) {
-          setCameraError(err.message || "Could not start camera.");
+          console.error("Camera Init Error:", err);
+          setCameraError("Unable to access camera. Please ensure permissions are granted.");
           setIsInitializing(false);
         }
       }
     };
 
-    // Small delay to ensure DOM is ready
-    const timer = setTimeout(initCamera, 300);
+    initCamera();
 
-    return () => {
-      isMounted = false;
-      clearTimeout(timer);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
+    return () => { 
+      isMounted = false; 
+      isLoopActive.current = false;
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop()); 
     };
   }, [isScannerOpen]);
 
-  // Auto-Scan Logic
-  useEffect(() => {
-    let timer: any;
-    if (isScannerOpen && !isInitializing && !isProcessing && !scanResult && !cameraError) {
-      const duration = 2500; // 2.5 seconds
-      const interval = 50;
-      const step = (interval / duration) * 100;
-      
-      timer = setInterval(() => {
-        setAutoScanProgress(prev => {
-          if (prev >= 100) {
-            clearInterval(timer);
-            handleFinalizeScan();
-            return 100;
-          }
-          return prev + step;
-        });
-      }, interval);
+  const resetAttendanceForDemo = async () => {
+    if (!activeSessionForMe) return;
+    const myRecord = records.find(r => r.sessionId === activeSessionForMe.id && r.studentId === student.id);
+    if (myRecord) {
+      await Database.deleteRecord(myRecord.id);
+      setScanResult(null);
     }
-    return () => clearInterval(timer);
-  }, [isScannerOpen, isInitializing, isProcessing, scanResult, cameraError]);
-
-  const handleFinalizeScan = () => {
-    setIsProcessing(true);
-    setTimeout(() => {
-      const alreadyMarked = checkAlreadyMarked();
-      if (!activeSessionForMe) {
-        setScanResult({ success: false, message: 'No active session found for your batch.' });
-      } else if (alreadyMarked) {
-        setScanResult({ success: false, message: 'You have already marked attendance for this session.' });
-      } else {
-        const newRecord: AttendanceRecord = {
-          id: Math.random().toString(36).substr(2, 9),
-          sessionId: activeSessionForMe.id,
-          studentId: student.id,
-          timestamp: Date.now()
-        };
-        Database.addRecord(newRecord);
-        setScanResult({ success: true, message: 'Attendance recorded successfully!' });
-      }
-      setIsProcessing(false);
-      setIsScannerOpen(false);
-    }, 500);
-  };
-
-  const resetAttendanceForDemo = () => {
-    if (!activeSessionForMe) {
-      alert("No active session detected.");
-      return;
-    }
-    const records = Database.getRecords();
-    const newRecords = records.filter(r => !(r.sessionId === activeSessionForMe.id && r.studentId === student.id));
-    localStorage.setItem('qra_records', JSON.stringify(newRecords));
-    setScanResult(null);
-    alert("Records cleared! You can try scanning again.");
-  };
-
-  const changeMonth = (offset: number) => {
-    const newDate = new Date(viewDate);
-    newDate.setMonth(newDate.getMonth() + offset);
-    setViewDate(newDate);
   };
 
   const attendanceData = useMemo(() => {
-    const allSessions = Database.getSessions();
-    const allRecords = Database.getRecords();
-    const allSubjects = Database.getSubjects();
-
-    const batchSessions = allSessions.filter(s => 
-      s.department === student.department &&
-      s.year === student.year &&
-      s.section === student.section
+    const studentDept = Database.normalize(student.department);
+    const batchSessions = sessions.filter(s => 
+      Database.normalize(s.department) === studentDept && 
+      Database.normalize(s.year) === Database.normalize(student.year) && 
+      Database.normalize(s.section) === Database.normalize(student.section)
     );
+    const myRecords = records.filter(r => r.studentId === student.id);
+    const monthSessions = batchSessions.filter(s => new Date(s.startTime).getMonth() === viewDate.getMonth());
+    const monthRecords = myRecords.filter(r => monthSessions.some(ms => ms.id === r.sessionId));
 
-    const myRecords = allRecords.filter(r => r.studentId === student.id);
-
-    const monthSessions = batchSessions.filter(s => {
-      const d = new Date(s.startTime);
-      return d.getMonth() === viewDate.getMonth() && d.getFullYear() === viewDate.getFullYear();
-    });
-
-    const monthRecords = myRecords.filter(r => {
-      const d = new Date(r.timestamp);
-      return d.getMonth() === viewDate.getMonth() && d.getFullYear() === viewDate.getFullYear();
-    });
-
-    const subjectStats = allSubjects
-      .filter(sub => sub.department === student.department)
-      .map(sub => {
-        const subSessions = monthSessions.filter(s => s.subjectId === sub.id);
-        const subRecords = monthRecords.filter(r => {
-          const session = monthSessions.find(ms => ms.id === r.sessionId);
-          return session?.subjectId === sub.id;
-        });
-
-        return {
-          id: sub.id,
-          name: sub.name,
-          code: sub.code,
-          conducted: subSessions.length,
-          attended: subRecords.length,
-          percentage: subSessions.length > 0 ? Math.round((subRecords.length / subSessions.length) * 100) : 0
-        };
-      })
-      .filter(stat => stat.conducted > 0);
+    const subjectStats = subjects.filter(sub => Database.normalize(sub.department) === studentDept).map(sub => {
+      const subSessions = monthSessions.filter(s => s.subjectId === sub.id);
+      const subRecords = monthRecords.filter(r => {
+        const sess = monthSessions.find(ms => ms.id === r.sessionId);
+        return sess && sess.subjectId === sub.id;
+      });
+      return { 
+        name: sub.name, 
+        code: sub.code, 
+        conducted: subSessions.length, 
+        attended: subRecords.length, 
+        percentage: subSessions.length > 0 ? Math.round((subRecords.length / subSessions.length) * 100) : 0 
+      };
+    }).filter(s => s.conducted > 0);
 
     const totalConducted = monthSessions.length;
-    const totalAttended = monthRecords.filter(r => monthSessions.some(ms => ms.id === r.sessionId)).length;
-    const overallPercentage = totalConducted > 0 ? Math.round((totalAttended / totalConducted) * 100) : 0;
-
-    return {
-      subjectStats,
-      totalConducted,
-      totalAttended,
-      overallPercentage,
-      recentRecords: myRecords.slice(-5).map(r => {
-        const session = allSessions.find(s => s.id === r.sessionId);
-        const subject = allSubjects.find(sub => sub.id === session?.subjectId);
-        return {
-          subject: subject?.name || 'Unknown',
-          date: new Date(r.timestamp).toLocaleDateString(),
-          period: session?.period || '?'
-        };
-      }).reverse()
-    };
-  }, [student, viewDate, scanResult]);
+    const totalAttended = monthRecords.length;
+    return { subjectStats, overallPercentage: totalConducted > 0 ? Math.round((totalAttended / totalConducted) * 100) : 0 };
+  }, [student, viewDate, sessions, records, subjects]);
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      {/* Profile Header */}
-      <div className="bg-gradient-to-r from-indigo-600 to-indigo-800 rounded-2xl p-6 text-white shadow-xl">
-        <div className="flex flex-col md:flex-row items-center gap-6">
-          <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center text-3xl font-bold backdrop-blur-md border border-white/30">
-            {student.name.charAt(0)}
+    <div className="max-w-4xl mx-auto space-y-6 pb-20">
+      <div className="bg-gradient-to-br from-indigo-600 via-indigo-700 to-indigo-900 rounded-[2.5rem] p-8 text-white shadow-2xl flex flex-col sm:flex-row items-center gap-8 border border-white/10 relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none"><Zap size={140} /></div>
+        <div className="w-24 h-24 bg-white/20 rounded-3xl flex items-center justify-center text-4xl font-black border border-white/30 backdrop-blur-md shadow-inner shrink-0 rotate-3">
+          {student.name.charAt(0)}
+        </div>
+        <div className="text-center sm:text-left flex-1">
+          <h2 className="text-3xl font-black tracking-tight mb-2">{student.name}</h2>
+          <div className="flex flex-wrap justify-center sm:justify-start gap-2">
+            <span className="px-3 py-1 bg-white/10 rounded-full text-[10px] font-black uppercase tracking-widest border border-white/10">{student.department}</span>
+            <span className="px-3 py-1 bg-white/10 rounded-full text-[10px] font-black uppercase tracking-widest border border-white/10">{student.year} YEAR</span>
+            <span className="px-3 py-1 bg-white/10 rounded-full text-[10px] font-black uppercase tracking-widest border border-white/10">SEC {student.section}</span>
           </div>
-          <div className="text-center md:text-left">
-            <h2 className="text-2xl font-bold">{student.name}</h2>
-            <div className="flex flex-wrap justify-center md:justify-start gap-3 mt-2 opacity-90 text-sm">
-              <span className="bg-white/10 px-3 py-1 rounded-full border border-white/10">Roll: {student.rollNumber}</span>
-              <span className="bg-white/10 px-3 py-1 rounded-full border border-white/10">{student.department} Dept</span>
-              <span className="bg-white/10 px-3 py-1 rounded-full border border-white/10">{student.year} Year / Sec {student.section}</span>
-            </div>
-          </div>
-          <div className="md:ml-auto flex gap-4">
-             <div className="text-center">
-                <p className="text-xs uppercase opacity-70 mb-1">Attendance</p>
-                <p className="text-2xl font-bold">{attendanceData.overallPercentage}%</p>
-             </div>
-          </div>
+        </div>
+        <div className="bg-white/10 px-8 py-4 rounded-[2rem] backdrop-blur-xl border border-white/20 text-center min-w-[140px] shadow-lg">
+          <p className="text-[10px] uppercase font-black opacity-60 tracking-widest mb-1">Overall</p>
+          <p className="text-4xl font-black">{attendanceData.overallPercentage}%</p>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex bg-white p-1 rounded-xl border border-slate-200 shadow-sm">
-        <button 
-          onClick={() => setActiveTab('scan')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${activeTab === 'scan' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'text-slate-500 hover:bg-slate-50'}`}
-        >
-          <Camera size={18} />
-          Scan QR Code
+      <div className="flex bg-white p-2 rounded-3xl border border-slate-100 shadow-xl shadow-slate-200/50 sticky top-20 z-40">
+        <button onClick={() => setActiveTab('scan')} className={`flex-1 py-4 rounded-2xl text-sm font-black transition-all flex items-center justify-center gap-2 tracking-tight ${activeTab === 'scan' ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200' : 'text-slate-400 hover:bg-slate-50'}`}>
+          <Smartphone size={18} /> SCANNER
         </button>
-        <button 
-          onClick={() => setActiveTab('monthly')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${activeTab === 'monthly' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'text-slate-500 hover:bg-slate-50'}`}
-        >
-          <History size={18} />
-          Reports & History
+        <button onClick={() => setActiveTab('monthly')} className={`flex-1 py-4 rounded-2xl text-sm font-black transition-all flex items-center justify-center gap-2 tracking-tight ${activeTab === 'monthly' ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-200' : 'text-slate-400 hover:bg-slate-50'}`}>
+          <History size={18} /> RECORDS
         </button>
       </div>
 
       {activeTab === 'scan' && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Scan Section */}
-          <div className="md:col-span-2 space-y-6">
-             {scanResult && (
-               <div className={`p-4 rounded-xl border flex items-center gap-3 animate-in slide-in-from-top-4 duration-300 ${scanResult.success ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
-                 {scanResult.success ? <CheckCircle className="shrink-0" /> : <AlertTriangle className="shrink-0" />}
-                 <div className="flex-1">
-                   <p className="font-bold">{scanResult.success ? 'Success!' : 'Scan Failed'}</p>
-                   <p className="text-sm opacity-90">{scanResult.message}</p>
-                 </div>
-                 <button onClick={() => setScanResult(null)} className="p-1 hover:bg-black/5 rounded-full"><X size={16} /></button>
-               </div>
-             )}
-
-             <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-               <div className="flex items-center justify-between mb-6">
-                 <div>
-                   <h3 className="text-lg font-bold text-slate-800">Current Session</h3>
-                   <p className="text-xs text-slate-500">Only sessions for your batch appear here</p>
-                 </div>
-                 {activeSessionForMe && (
-                   <div className="flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold animate-pulse">
-                     <Wifi size={14} /> LIVE SESSION
-                   </div>
-                 )}
-               </div>
-
-               {activeSessionForMe ? (
-                 <div className="p-5 bg-indigo-50/50 rounded-2xl border border-indigo-100">
-                    <div className="flex items-start gap-4">
-                      <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-indigo-600 border border-indigo-100 shadow-sm">
-                        <Clock size={24} />
-                      </div>
-                      <div className="flex-1">
-                        <h4 className="font-bold text-slate-800">{Database.getSubjects().find(s => s.id === activeSessionForMe.subjectId)?.name}</h4>
-                        <div className="flex gap-4 mt-1">
-                          <span className="text-xs font-medium text-slate-500 flex items-center gap-1"><UserCheck size={14} /> Period {activeSessionForMe.period}</span>
-                          <span className="text-xs font-medium text-slate-500 flex items-center gap-1"><Clock size={14} /> Expiring Soon</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {!isMarked ? (
-                      <button 
-                        onClick={() => setIsScannerOpen(true)}
-                        className="w-full mt-6 bg-indigo-600 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 shadow-lg shadow-indigo-100 active:scale-[0.98] transition-all"
-                      >
-                        <Camera size={20} />
-                        Mark Attendance
-                      </button>
-                    ) : (
-                      <div className="mt-6 flex flex-col items-center gap-3">
-                         <div className="w-full bg-green-600 text-white py-4 rounded-xl font-bold flex items-center justify-center gap-2 cursor-default">
-                           <CheckCircle size={20} />
-                           Attendance Marked
-                         </div>
-                         <button onClick={resetAttendanceForDemo} className="text-xs text-slate-400 hover:text-indigo-600 font-medium">Reset for Demo</button>
-                      </div>
-                    )}
-                 </div>
-               ) : (
-                 <div className="py-12 flex flex-col items-center opacity-50">
-                   <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 mb-4">
-                     <WifiOff size={32} />
-                   </div>
-                   <p className="text-slate-500 font-medium">No active session at the moment</p>
-                 </div>
-               )}
-             </div>
+        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50 space-y-8">
+          <div className="flex justify-between items-center px-2">
+            <h3 className="font-black text-slate-800 tracking-tight flex items-center gap-2 uppercase text-xs">
+              <Zap size={16} className="text-indigo-600 fill-indigo-600" /> Active Session Finder
+            </h3>
+            <button 
+              onClick={handleManualRefresh} 
+              className={`flex items-center gap-2 px-4 py-2 text-xs font-black text-indigo-600 bg-indigo-50 rounded-xl border border-indigo-100 transition-all uppercase tracking-widest ${isRefreshing ? 'opacity-50 cursor-wait' : 'hover:bg-indigo-100'}`}
+            >
+              <RefreshCcw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+              {isRefreshing ? 'Syncing...' : 'Refresh'}
+            </button>
           </div>
 
-          {/* Side Info */}
-          <div className="space-y-6">
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><History size={18} className="text-indigo-600" /> Recent Scans</h3>
-              <div className="space-y-3">
-                {attendanceData.recentRecords.length > 0 ? attendanceData.recentRecords.map((r, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <div>
-                      <p className="text-sm font-bold text-slate-800 truncate max-w-[120px]">{r.subject}</p>
-                      <p className="text-[10px] text-slate-500">{r.date} • Period {r.period}</p>
-                    </div>
-                    <CheckCircle size={16} className="text-green-500" />
+          {activeSessionForMe ? (
+            <div className="p-10 bg-indigo-50/50 border-2 border-dashed border-indigo-200 rounded-[2.5rem] text-center relative overflow-hidden group">
+              <div className="absolute top-0 right-0 p-6">
+                <span className="flex items-center gap-1.5 bg-green-500 text-white px-5 py-2 rounded-full text-[10px] font-black tracking-widest animate-pulse uppercase shadow-xl shadow-green-200">
+                  <Sparkles size={12} fill="currentColor" /> Session Live
+                </span>
+              </div>
+              
+              <div className="inline-flex items-center justify-center w-20 h-20 bg-white rounded-3xl shadow-xl text-indigo-600 mb-6 border border-indigo-50">
+                <ScanLine size={40} />
+              </div>
+
+              <h4 className="font-black text-slate-800 text-3xl mb-2">
+                {subjects.find(s => s.id === activeSessionForMe.subjectId)?.name || "Live Class"}
+              </h4>
+              <p className="text-slate-400 font-bold text-sm mb-10 flex items-center justify-center gap-2">
+                <Clock size={16} className="text-indigo-400" /> Period {activeSessionForMe.period} • {activeSessionForMe.department}
+              </p>
+              
+              {!isMarked ? (
+                <button 
+                  onClick={() => setIsScannerOpen(true)} 
+                  className="w-full max-w-sm mx-auto bg-indigo-600 text-white py-6 rounded-[2rem] font-black flex items-center justify-center gap-3 shadow-[0_20px_40px_rgba(79,70,229,0.3)] hover:bg-indigo-700 transition-all active:scale-[0.98] uppercase tracking-widest text-sm"
+                >
+                  <Camera size={24} /> Point & Scan QR
+                </button>
+              ) : (
+                <div className="space-y-6">
+                  <div className="w-full max-w-sm mx-auto bg-green-600 text-white py-6 rounded-[2rem] font-black flex items-center justify-center gap-3 shadow-[0_20px_40px_rgba(22,163,74,0.3)]">
+                    <CheckCircle size={24} /> Verified Present
                   </div>
-                )) : (
-                   <p className="text-xs text-slate-400 text-center py-4 italic">No recent activity</p>
-                )}
-              </div>
+                  <button onClick={resetAttendanceForDemo} className="text-[10px] text-slate-300 hover:text-indigo-600 uppercase font-black tracking-[0.2em] transition-colors">
+                    Reset For Demo
+                  </button>
+                </div>
+              )}
             </div>
-
-            <div className="bg-indigo-600 p-6 rounded-2xl text-white shadow-lg shadow-indigo-100">
-              <div className="flex items-center gap-3 mb-4">
-                <Info size={18} className="opacity-80" />
-                <h3 className="font-bold">Guidelines</h3>
+          ) : (
+            <div className="py-24 text-center bg-slate-50/50 border-2 border-dashed border-slate-200 rounded-[2.5rem] flex flex-col items-center">
+              <div className="w-24 h-24 bg-white rounded-[2rem] flex items-center justify-center mb-8 text-slate-200 shadow-inner">
+                <Smartphone size={48} />
               </div>
-              <ul className="text-xs space-y-2 opacity-90 list-disc ml-4">
-                <li>Scanner works best in good lighting</li>
-                <li>Ensure you are connected to college Wi-Fi</li>
-                <li>Duplicate scans will not be recorded</li>
-                <li>Sessions expire after 10 minutes</li>
-              </ul>
+              <p className="font-black text-slate-500 text-xl mb-4">No Active Session Found</p>
+              <div className="p-6 bg-white border border-slate-100 rounded-[2rem] text-xs text-slate-400 space-y-2 shadow-sm">
+                <p className="uppercase font-black tracking-widest opacity-60">Batch Monitoring</p>
+                <div className="flex gap-3 justify-center font-black text-indigo-600 uppercase text-sm">
+                  <span>{student.department}</span>
+                  <span className="opacity-20">•</span>
+                  <span>{student.year} YEAR</span>
+                  <span className="opacity-20">•</span>
+                  <span>SEC {student.section}</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-300 mt-10 max-w-[320px] leading-relaxed italic font-medium">
+                Active sessions for your specific batch will appear here automatically.
+              </p>
             </div>
-          </div>
+          )}
         </div>
       )}
 
       {activeTab === 'monthly' && (
-        <div className="space-y-6">
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-             <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-4">
-                   <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded-lg transition-colors"><ChevronLeft size={20} /></button>
-                   <h3 className="text-lg font-bold text-slate-800 min-w-[150px] text-center">{months[viewDate.getMonth()]} {viewDate.getFullYear()}</h3>
-                   <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded-lg transition-colors"><ChevronRight size={20} /></button>
-                </div>
-                <div className="flex items-center gap-2 text-sm font-bold text-indigo-600 bg-indigo-50 px-4 py-2 rounded-full">
-                  <BarChart3 size={18} />
-                  {attendanceData.overallPercentage}% Monthly Avg
-                </div>
-             </div>
-
-             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-               {attendanceData.subjectStats.map(stat => (
-                 <div key={stat.id} className="p-5 rounded-2xl border border-slate-100 bg-slate-50/50 hover:border-indigo-200 transition-all group">
-                   <div className="flex items-center justify-between mb-3">
-                     <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded uppercase">{stat.code}</span>
-                     <span className={`text-xs font-bold ${stat.percentage >= 75 ? 'text-green-600' : stat.percentage >= 60 ? 'text-orange-600' : 'text-red-600'}`}>
-                       {stat.percentage}%
-                     </span>
-                   </div>
-                   <h4 className="font-bold text-slate-800 text-sm mb-4 line-clamp-1">{stat.name}</h4>
-                   <div className="flex items-center justify-between text-[10px] text-slate-500 font-bold uppercase tracking-wider">
-                     <span>{stat.attended} Attended</span>
-                     <span>{stat.conducted} Total</span>
-                   </div>
-                   <div className="mt-2 w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
-                     <div 
-                        className={`h-full transition-all duration-1000 ${stat.percentage >= 75 ? 'bg-green-500' : stat.percentage >= 60 ? 'bg-orange-500' : 'bg-red-500'}`} 
-                        style={{width: `${stat.percentage}%`}}
-                      ></div>
-                   </div>
-                 </div>
-               ))}
-               {attendanceData.subjectStats.length === 0 && (
-                 <div className="col-span-full py-12 text-center text-slate-400">
-                    <Calendar size={48} className="mx-auto mb-4 opacity-20" />
-                    <p>No classes conducted in this period</p>
-                 </div>
-               )}
-             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Scanner Modal */}
-      {isScannerOpen && (
-        <div className="fixed inset-0 z-[100] bg-black flex flex-col">
-          <div className="p-4 flex items-center justify-between text-white bg-black/50 backdrop-blur-md absolute top-0 left-0 right-0 z-10">
-            <div className="flex items-center gap-3">
-              <Camera size={20} className="text-indigo-400" />
-              <h3 className="font-bold">QR Attendance Scanner</h3>
+        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-xl shadow-slate-200/50 space-y-8">
+          <div className="flex items-center justify-between">
+            <h3 className="text-2xl font-black text-slate-800 tracking-tight">{months[viewDate.getMonth()]} {viewDate.getFullYear()}</h3>
+            <div className="flex gap-3">
+              <button onClick={() => setViewDate(new Date(viewDate.setMonth(viewDate.getMonth() - 1)))} className="w-12 h-12 flex items-center justify-center border border-slate-100 rounded-2xl hover:bg-slate-50 transition-colors shadow-sm"><ChevronLeft size={20}/></button>
+              <button onClick={() => setViewDate(new Date(viewDate.setMonth(viewDate.getMonth() + 1)))} className="w-12 h-12 flex items-center justify-center border border-slate-100 rounded-2xl hover:bg-slate-50 transition-colors shadow-sm"><ChevronRight size={20}/></button>
             </div>
-            <button onClick={() => setIsScannerOpen(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-              <X size={24} />
-            </button>
           </div>
-
-          <div className="flex-1 relative flex items-center justify-center bg-slate-900">
-            {isInitializing && (
-              <div className="flex flex-col items-center gap-3 text-white">
-                <Loader2 size={48} className="animate-spin text-indigo-500" />
-                <p className="text-sm font-medium">Accessing Camera...</p>
-              </div>
-            )}
-
-            {cameraError && (
-              <div className="max-w-xs text-center p-8 bg-red-900/20 rounded-3xl border border-red-500/30 text-red-100">
-                <AlertTriangle size={48} className="mx-auto mb-4 text-red-500" />
-                <h4 className="font-bold mb-2">Camera Access Failed</h4>
-                <p className="text-sm opacity-80 mb-6">{cameraError}</p>
-                <button 
-                  onClick={() => setIsScannerOpen(false)}
-                  className="w-full bg-white text-slate-900 py-3 rounded-xl font-bold hover:bg-slate-100 transition-colors"
-                >
-                  Go Back
-                </button>
-              </div>
-            )}
-
-            {!cameraError && (
-              <div className="relative w-full h-full flex items-center justify-center overflow-hidden">
-                <video 
-                  ref={videoRef} 
-                  autoPlay 
-                  playsInline 
-                  muted
-                  className="w-full h-full object-cover"
-                />
-                
-                {/* Scanner Overlay */}
-                <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
-                  <div className="relative w-72 h-72">
-                    {/* Corner Borders */}
-                    <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-indigo-500 rounded-tl-2xl"></div>
-                    <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-indigo-500 rounded-tr-2xl"></div>
-                    <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-indigo-500 rounded-bl-2xl"></div>
-                    <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-indigo-500 rounded-br-2xl"></div>
-                    
-                    {/* Scanning Line */}
-                    <div className="absolute top-0 left-4 right-4 h-1 bg-indigo-500/50 shadow-[0_0_15px_rgba(79,70,229,0.8)] animate-scanner"></div>
-                    
-                    {/* Success/Processing Overlay */}
-                    {isProcessing && (
-                      <div className="absolute inset-0 bg-indigo-600/20 backdrop-blur-[2px] rounded-2xl flex items-center justify-center">
-                        <RefreshCcw size={48} className="text-white animate-spin" />
-                      </div>
-                    )}
+          {attendanceData.subjectStats.length === 0 ? (
+            <div className="py-24 text-center text-slate-300 bg-slate-50/50 rounded-[2.5rem] border-2 border-dashed">
+              <BarChart3 size={64} className="mx-auto mb-6 opacity-10" />
+              <p className="text-sm font-black uppercase tracking-widest">No activity for this month</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {attendanceData.subjectStats.map((s, i) => (
+                <div key={i} className="p-6 bg-white border border-slate-100 rounded-3xl flex justify-between items-center group hover:border-indigo-400 transition-all hover:shadow-2xl hover:shadow-indigo-100/50">
+                  <div className="space-y-1">
+                    <p className="font-black text-slate-800 text-lg tracking-tight">{s.name}</p>
+                    <p className="text-[10px] text-slate-400 font-black uppercase tracking-[0.15em]">{s.attended} Present / {s.conducted} Total</p>
                   </div>
-                  
-                  <div className="mt-12 text-center text-white space-y-4">
-                    <p className="text-sm font-bold tracking-widest uppercase flex items-center gap-2">
-                       <ScanLine size={16} className="text-indigo-400" /> Align QR within frame
-                    </p>
-                    <div className="w-64 h-2 bg-white/20 rounded-full overflow-hidden">
-                       <div className="h-full bg-indigo-500 transition-all duration-100" style={{width: `${autoScanProgress}%`}}></div>
-                    </div>
+                  <div className={`text-2xl font-black px-4 py-2 rounded-2xl ${s.percentage >= 75 ? 'bg-green-50 text-green-600' : 'bg-orange-50 text-orange-600'}`}>
+                    {s.percentage}%
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
-          <div className="p-8 bg-black/80 backdrop-blur-xl border-t border-white/5 flex justify-center">
-            <p className="text-white/40 text-xs font-medium uppercase tracking-[0.2em]">QR-Attend Secure Verification</p>
+      {isScannerOpen && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/98 backdrop-blur-2xl flex flex-col items-center justify-center p-6 overflow-hidden">
+          <button 
+            onClick={() => setIsScannerOpen(false)} 
+            className="absolute top-10 right-10 p-4 bg-white/10 rounded-full text-white hover:bg-white/20 transition-all z-[110] border border-white/10 shadow-2xl"
+          >
+            <X size={24}/>
+          </button>
+          
+          <div className="w-full max-w-sm flex flex-col items-center gap-10">
+            {scanResult ? (
+              <div className={`w-full rounded-[3rem] p-10 text-center space-y-6 shadow-2xl animate-in zoom-in duration-300 ${scanResult.success ? 'bg-white border-4 border-green-500 shadow-green-200' : 'bg-white border-4 border-red-500 shadow-red-200'}`}>
+                <div className={`w-24 h-24 rounded-[2rem] mx-auto flex items-center justify-center shadow-inner ${scanResult.success ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
+                  {scanResult.success ? <UserCheck size={48} /> : <AlertTriangle size={48} />}
+                </div>
+                <div className="space-y-2">
+                  <h3 className={`text-2xl font-black tracking-tight ${scanResult.success ? 'text-green-600' : 'text-red-600'}`}>
+                    {scanResult.success ? 'Scan Successful' : 'Scan Failure'}
+                  </h3>
+                  <p className="text-slate-500 font-bold">{scanResult.message}</p>
+                </div>
+                {scanResult.success && (
+                   <div className="p-4 bg-slate-50 rounded-2xl text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center justify-center gap-2">
+                     <Loader2 size={14} className="animate-spin" /> Auto-Closing...
+                   </div>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="relative w-full aspect-square border-[10px] border-indigo-500 rounded-[4rem] overflow-hidden shadow-[0_0_120px_rgba(79,70,229,0.5)] bg-black">
+                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover grayscale contrast-125" />
+                  <canvas ref={canvasRef} className="hidden" />
+                  <div className="absolute top-0 left-0 w-full h-1.5 bg-indigo-400 shadow-[0_0_35px_rgba(79,70,229,1)] animate-scanner z-10"></div>
+                  
+                  {/* Viewfinder corners */}
+                  <div className="absolute top-10 left-10 w-16 h-16 border-t-8 border-l-8 border-white/40 rounded-tl-2xl"></div>
+                  <div className="absolute top-10 right-10 w-16 h-16 border-t-8 border-r-8 border-white/40 rounded-tr-2xl"></div>
+                  <div className="absolute bottom-10 left-10 w-16 h-16 border-b-8 border-l-8 border-white/40 rounded-bl-2xl"></div>
+                  <div className="absolute bottom-10 right-10 w-16 h-16 border-b-8 border-r-8 border-white/40 rounded-br-2xl"></div>
+                  
+                  {isInitializing && (
+                    <div className="absolute inset-0 bg-slate-900 flex flex-col items-center justify-center text-white gap-6">
+                      <div className="relative">
+                        <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                        <Camera className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-indigo-500" size={24} />
+                      </div>
+                      <p className="text-xs font-black uppercase tracking-[0.2em] animate-pulse">Initializing Vision...</p>
+                    </div>
+                  )}
+
+                  {isProcessing && (
+                    <div className="absolute inset-0 bg-indigo-600/80 backdrop-blur-md flex flex-col items-center justify-center text-white gap-4">
+                      <Loader2 className="animate-spin" size={48} />
+                      <p className="font-black uppercase tracking-widest text-xs">Finalizing Attendance...</p>
+                    </div>
+                  )}
+
+                  {cameraError && (
+                    <div className="absolute inset-0 bg-slate-900 p-10 flex flex-col items-center justify-center text-center text-white gap-6">
+                      <AlertTriangle className="text-red-500" size={64} />
+                      <div className="space-y-2">
+                        <p className="font-black text-lg">Camera Error</p>
+                        <p className="text-slate-400 text-xs font-medium leading-relaxed">{cameraError}</p>
+                      </div>
+                      <button onClick={() => setIsScannerOpen(false)} className="px-8 py-4 bg-indigo-600 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shadow-indigo-500/20">Go Back</button>
+                    </div>
+                  )}
+                </div>
+                
+                <div className="text-center space-y-4">
+                  <div className="inline-flex items-center gap-2 px-4 py-1.5 bg-white/5 rounded-full border border-white/10 text-white">
+                     <span className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></span>
+                     <p className="font-black tracking-[0.3em] uppercase text-[10px] opacity-80">Scanning Faculty QR</p>
+                  </div>
+                  <p className="text-slate-400 text-sm max-w-[280px] font-medium leading-relaxed">
+                    Point your camera at the teacher's QR code. Recognition and submission happens <span className="text-indigo-400 font-black uppercase">instantly</span>.
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
+      
+      <style>{`
+        @keyframes scanner { 
+          0% { top: 10%; opacity: 0; } 
+          10% { opacity: 1; }
+          90% { opacity: 1; }
+          100% { top: 90%; opacity: 0; } 
+        } 
+        .animate-scanner { animation: scanner 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+      `}</style>
     </div>
   );
 };

@@ -30,6 +30,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
   const activeSessionRef = useRef<AttendanceSession | null>(null);
   const isMarkedRef = useRef<boolean>(false);
   const isLoopActive = useRef<boolean>(false);
+  const processingRef = useRef<boolean>(false);
 
   const [viewDate, setViewDate] = useState(new Date());
   const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -72,9 +73,9 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
   };
 
   const handleProcessAttendance = async (session: AttendanceSession) => {
-    if (isProcessing) return;
+    if (processingRef.current) return;
     
-    // Kill loop immediately to prevent double processing
+    processingRef.current = true;
     isLoopActive.current = false;
     setIsProcessing(true);
     
@@ -93,11 +94,13 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
         setIsScannerOpen(false);
         setScanResult(null);
         setIsProcessing(false);
+        processingRef.current = false;
       }, 2500);
     } catch (err) {
       console.error("Attendance submission failed:", err);
       setScanResult({ success: false, message: 'Failed to sync with server. Try again.' });
       setIsProcessing(false);
+      processingRef.current = false;
       // Resume loop on failure
       isLoopActive.current = true;
       requestRef.current = requestAnimationFrame(tick);
@@ -105,7 +108,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
   };
 
   const tick = () => {
-    if (!isLoopActive.current || !isScannerOpen) return;
+    if (!isLoopActive.current || !isScannerOpen || processingRef.current) return;
 
     if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
       const video = videoRef.current;
@@ -115,17 +118,19 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
       const canvas = canvasElement.getContext("2d", { willReadFrequently: true });
       if (!canvas) return;
 
-      // Match canvas to actual video stream resolution
-      canvasElement.height = video.videoHeight;
-      canvasElement.width = video.videoWidth;
+      // Always match canvas to actual video stream resolution for best QR detection
+      if (canvasElement.width !== video.videoWidth || canvasElement.height !== video.videoHeight) {
+        canvasElement.width = video.videoWidth;
+        canvasElement.height = video.videoHeight;
+      }
       
-      // Draw frame
+      // Draw frame from raw video
       canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
       
       // Analyze frame for QR
       const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
       const code = jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: "dontInvert",
+        inversionAttempts: "attemptBoth", // Better detection in various environments
       });
       
       if (code && code.data) {
@@ -134,9 +139,9 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
         if (session && code.data === session.qrPayload) {
           if (!isMarkedRef.current) {
             handleProcessAttendance(session);
-            return; // Exit loop
+            return; // Stop the loop
           } else {
-            setScanResult({ success: true, message: 'Attendance already marked for this session.' });
+            setScanResult({ success: true, message: 'Already marked for this class.' });
             isLoopActive.current = false;
             setTimeout(() => setIsScannerOpen(false), 2000);
             return;
@@ -152,6 +157,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
   useEffect(() => {
     if (!isScannerOpen) {
       isLoopActive.current = false;
+      processingRef.current = false;
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(t => t.stop());
@@ -163,16 +169,20 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
     let isMounted = true;
     setCameraError(null);
     setIsInitializing(true);
+    setScanResult(null);
 
     const startCamera = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
+        const constraints = {
           video: { 
             facingMode: 'environment',
             width: { ideal: 1280 },
             height: { ideal: 720 }
-          } 
-        }).catch(() => navigator.mediaDevices.getUserMedia({ video: true }));
+          }
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints)
+          .catch(() => navigator.mediaDevices.getUserMedia({ video: true }));
 
         if (isMounted) {
           streamRef.current = stream;
@@ -188,7 +198,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
       } catch (err: any) {
         if (isMounted) {
           console.error("Camera access failed:", err);
-          setCameraError("Camera permission denied or hardware unavailable.");
+          setCameraError("Camera permission denied. Please enable camera access in your browser settings.");
           setIsInitializing(false);
         }
       }
@@ -210,6 +220,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
     if (myRecord) {
       await Database.deleteRecord(myRecord.id);
       setScanResult(null);
+      processingRef.current = false;
     }
   };
 
@@ -407,7 +418,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ student }) => {
             ) : (
               <>
                 <div className="relative w-full aspect-square border-[10px] border-indigo-500 rounded-[4rem] overflow-hidden shadow-[0_0_120px_rgba(79,70,229,0.5)] bg-black">
-                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover grayscale contrast-125" />
+                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
                   <canvas ref={canvasRef} className="hidden" />
                   <div className="absolute top-0 left-0 w-full h-1.5 bg-indigo-400 shadow-[0_0_35px_rgba(79,70,229,1)] animate-scanner z-10"></div>
                   

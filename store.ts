@@ -1,3 +1,4 @@
+
 import { initializeApp, FirebaseApp, getApp, getApps } from 'firebase/app';
 import { getDatabase, ref, onValue, set, update, remove, Database as FirebaseRTDB } from 'firebase/database';
 import { useState, useEffect } from 'react';
@@ -47,7 +48,6 @@ export class Database {
   private static initialized = false;
   private static isLocalMode = false;
 
-  // Fix: Ensure the returned unsubscription function returns void to avoid React useEffect type errors
   static subscribe(listener: Listener) {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
@@ -56,7 +56,6 @@ export class Database {
   private static notify() {
     this.cache = { ...this.cache };
     this.listeners.forEach(l => l());
-    // Persist to localStorage to allow other tabs to see the change
     this.persistToLocal();
   }
 
@@ -78,11 +77,7 @@ export class Database {
 
   static async init(): Promise<void> {
     if (this.initialized) return;
-
-    // Load initial state
     this.loadFromLocal();
-
-    // Listen for changes from OTHER tabs (Crucial for Local Mode testing)
     window.addEventListener('storage', (event) => {
       if (event.key === LOCAL_STORAGE_KEY) {
         this.loadFromLocal();
@@ -96,9 +91,7 @@ export class Database {
       } else {
         app = getApp();
       }
-
       db = getDatabase(app);
-      
       const paths = Object.values(STORAGE_PATHS);
       paths.forEach(path => {
         if (!db) return;
@@ -106,17 +99,14 @@ export class Database {
         onValue(dbRef, (snapshot) => {
           const val = snapshot.val();
           const data = val ? (Object.values(val) as any[]) : [];
-          
           if (path === STORAGE_PATHS.USERS) this.cache.users = data;
           if (path === STORAGE_PATHS.SESSIONS) this.cache.sessions = data;
           if (path === STORAGE_PATHS.RECORDS) this.cache.records = data;
           if (path === STORAGE_PATHS.SUBJECTS) this.cache.subjects = data;
           if (path === STORAGE_PATHS.DEPARTMENTS) this.cache.departments = data;
-          
           this.notify();
         });
       });
-
       this.initialized = true;
       await this.seed();
     } catch (err) {
@@ -124,12 +114,9 @@ export class Database {
       await this.seed();
       this.initialized = true;
     }
-    
-    // Final notification after init
     this.notify();
   }
 
-  // Resilient normalization for batch matching
   static normalize(val: string | undefined): string {
     if (!val) return "";
     return val.toString().trim().toLowerCase().replace(/\s+year/g, "");
@@ -206,15 +193,20 @@ export class Database {
     if (this.cache.users.length > 0) return;
     const initialDepts: Department[] = [
       { id: 'd1', name: 'Computer Science', code: 'CS' },
-      { id: 'd2', name: 'Electrical Engineering', code: 'EE' }
+      { id: 'd2', name: 'Electrical Engineering', code: 'EE' },
+      { id: 'd3', name: 'Mechanical Engineering', code: 'ME' },
+      { id: 'd4', name: 'Civil Engineering', code: 'CE' },
+      { id: 'd5', name: 'Electronics & Comm.', code: 'EC' }
     ];
     const initialUsers: User[] = [
       { id: '1', name: 'Admin', email: 'admin@college.edu', role: UserRole.ADMIN, password: 'password' },
       { id: '2', name: 'Dr. Sarah Johnson', email: 'sarah@college.edu', role: UserRole.TEACHER, department: 'CS', password: 'password' },
-      { id: '3', name: 'John Doe', email: 'john@college.edu', role: UserRole.STUDENT, department: 'CS', year: '3rd', section: 'A', rollNumber: 'CS301', password: 'password' }
+      { id: '3', name: 'John Doe', email: 'john@college.edu', role: UserRole.STUDENT, department: 'CS', year: '3rd', section: 'A', rollNumber: 'CS301', password: 'password' },
+      { id: 'hod', name: 'Dr. Department Head', email: 'hod@college.edu', role: UserRole.DEPT_HEAD, department: 'CS', password: 'password' }
     ];
     const initialSubjects: Subject[] = [
       { id: 's1', name: 'Data Structures', code: 'CS101', department: 'CS' },
+      { id: 's2', name: 'Power Systems', code: 'EE201', department: 'EE' },
       { id: 's3', name: 'Web Development', code: 'CS301', department: 'CS' }
     ];
     this.cache.departments = initialDepts;
@@ -232,7 +224,6 @@ export function useDatabase() {
     subjects: Database.getSubjects(),
     departments: Database.getDepartments()
   });
-  // Fix: The subscribe method now returns () => void, satisfying EffectCallback requirements
   useEffect(() => {
     return Database.subscribe(() => {
       setData({
